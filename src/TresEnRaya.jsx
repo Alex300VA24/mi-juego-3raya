@@ -55,6 +55,8 @@ const TresEnRaya = () => {
     // UI Feedback
     const [copied, setCopied] = useState(false);
     const [errorMsg, setErrorMsg] = useState('');
+    const [showExitConfirm, setShowExitConfirm] = useState(false);
+    const [opponentLeft, setOpponentLeft] = useState(false);
 
     // Referencias
     const unsubscribeRef = useRef(null);
@@ -201,12 +203,13 @@ const TresEnRaya = () => {
 
     const generateRoomCode = () => Math.random().toString(36).substring(2, 8).toUpperCase();
 
-    const subscribeToGame = useCallback((code) => {
+    const subscribeToGame = useCallback((code, role) => {
         if (unsubscribeRef.current) unsubscribeRef.current();
         const gameRef = getGameRef(code);
         unsubscribeRef.current = onSnapshot(gameRef, (docSnap) => {
             if (docSnap.exists()) {
                 const data = docSnap.data();
+                
                 setBoard(data.board);
                 setTurn(data.turn);
                 setScores(data.scores);
@@ -214,14 +217,18 @@ const TresEnRaya = () => {
                 setWinningLine(data.winningLine || []);
                 setRoundStarter(data.roundStarter);
                 
-                if (myRole === 'X') {
+                // Detectar si el oponente abandonó
+                if (data.playerLeft && data.playerLeft !== role) {
+                    setOpponentLeft(true);
+                }
+                
+                if (role === 'X') {
                     setOpponentName(data.players.O || 'Esperando...');
-                } else if (myRole === 'O') {
+                } else if (role === 'O') {
                     setOpponentName(data.players.X || 'Esperando...');
                 }
                 
-                // MODIFICADO: Iniciar juego solo si gameStarted es true
-                if (data.gameStarted && view === 'lobby') {
+                if (data.gameStarted) {
                     setView('game');
                 }
             }
@@ -229,12 +236,13 @@ const TresEnRaya = () => {
             console.error("Error en snapshot:", error);
             setErrorMsg("Error de conexión");
         });
-    }, [view, myRole]);
+    }, []);
 
     const createOnlineGame = useCallback(async () => {
         if (!user) return;
         const code = generateRoomCode();
         const timestamp = Date.now();
+        
         setRoomId(code);
         setMyRole('X');
         setGameMode('online');
@@ -242,7 +250,6 @@ const TresEnRaya = () => {
         
         const gameRef = getGameRef(code);
         
-        // CORRECCIÓN: Date.now() llamada dentro de useCallback
         await setDoc(gameRef, {
             board: Array(9).fill(null),
             turn: 'X',
@@ -251,17 +258,17 @@ const TresEnRaya = () => {
             scores: { X: 0, O: 0 },
             winner: null,
             winningLine: [],
-            gameStarted: false, // NUEVO
+            gameStarted: false,
             createdAt: timestamp 
         });
 
-        subscribeToGame(code);
+        subscribeToGame(code, 'X'); // PASAR 'X' como parámetro
         setView('lobby');
     }, [user, playerName, subscribeToGame]);
 
     const joinOnlineGame = async () => {
         if (!user || !joinCode) return;
-        setErrorMsg(''); // Limpiar errores previos
+        setErrorMsg('');
         
         const code = joinCode.toUpperCase().trim();
         const gameRef = getGameRef(code);
@@ -272,18 +279,19 @@ const TresEnRaya = () => {
             if (snap.exists()) {
                 const data = snap.data();
                 
-                // Verificar que el jugador O no esté ocupado
                 if (!data.players.O) {
+                    setRoomId(code);
+                    setMyRole('O');
+                    setGameMode('online');
+                    setOpponentName(data.players.X);
+                    
                     await updateDoc(gameRef, {
                         'players.O': playerName
                     });
                     
-                    setRoomId(code);
-                    setMyRole('O');
-                    setGameMode('online');
-                    setOpponentName(data.players.X); // Establecer el nombre del oponente
-                    subscribeToGame(code);
-                    setView('game'); // Ir directo al juego
+                    subscribeToGame(code, 'O'); // PASAR 'O' como parámetro
+                    setView('lobby');
+                    
                 } else {
                     setErrorMsg('La partida está llena.');
                 }
@@ -296,10 +304,27 @@ const TresEnRaya = () => {
         }
     };
     const startOnlineGame = async () => {
+        console.log('se llamo a la funcion');
+        console.log('roomId:', roomId);
+        if (!roomId) return;
+        
         const gameRef = getGameRef(roomId);
-        await updateDoc(gameRef, {
-            gameStarted: true
-        });
+        console.log('gameRef path:', gameRef.path);
+        
+        try {
+            console.log('intentando iniciar partida');
+            await updateDoc(gameRef, {
+                gameStarted: true
+            });
+            console.log('partida iniciada en Firestore');
+            
+            // FORZAR el cambio de vista inmediatamente
+            setView('game');
+            
+        } catch (error) {
+            console.error("Error al iniciar partida:", error);
+            setErrorMsg("Error al iniciar la partida");
+        }
     };
 
     const handleOnlineClick = async (index) => {
@@ -348,7 +373,19 @@ const TresEnRaya = () => {
         }
     };
 
-    const resetAll = () => {
+    const resetAll = async () => {
+        // Si estamos en modo online y en una partida activa, notificar al otro jugador
+        if (gameMode === 'online' && roomId && view === 'game') {
+            try {
+                const gameRef = getGameRef(roomId);
+                await updateDoc(gameRef, {
+                    playerLeft: myRole
+                });
+            } catch (error) {
+                console.error("Error al notificar abandono:", error);
+            }
+        }
+        
         if (unsubscribeRef.current) unsubscribeRef.current();
         setView('menu');
         setGameMode(null);
@@ -358,6 +395,26 @@ const TresEnRaya = () => {
         setScores({ X: 0, O: 0 });
         setErrorMsg('');
         setRoomId(null);
+        setShowExitConfirm(false);
+        setOpponentLeft(false);
+    };
+
+    const handleExitClick = () => {
+        // Solo mostrar confirmación si estamos en modo online durante el juego
+        if (gameMode === 'online' && view === 'game') {
+            setShowExitConfirm(true);
+        } else {
+            resetAll();
+        }
+    };
+
+    const confirmExit = () => {
+        setShowExitConfirm(false);
+        resetAll();
+    };
+
+    const cancelExit = () => {
+        setShowExitConfirm(false);
     };
 
     const copyCode = async () => {
@@ -583,7 +640,7 @@ const TresEnRaya = () => {
     }
 
     // 5. JUEGO PRINCIPAL
-    const mySymbol = gameMode === 'online' ? myRole : 'X';
+    // const mySymbol = gameMode === 'online' ? myRole : 'X';
 
     return (
         <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white">
@@ -627,7 +684,24 @@ const TresEnRaya = () => {
                 <div className="flex items-center justify-center mb-6 h-8 min-h-[2rem]">
                     {winner ? (
                         <span className={`px-4 py-1 rounded-full font-bold text-sm sm:text-base ${winner === 'Draw' ? 'bg-slate-700 text-slate-300' : 'bg-emerald-500/20 text-emerald-400'}`}>
-                            {winner === 'Draw' ? 'Empate' : `¡${winner === 'X' ? (gameMode === 'online' && mySymbol === 'X' ? 'Tú' : playerName) : (gameMode === 'online' && mySymbol === 'O' ? 'Tú' : opponentName)} gana!`}
+                            {winner === 'Draw' ? 'Empate' : (() => {
+                                // Determinar quién ganó
+                                let winnerText = '';
+                                if (gameMode === 'online') {
+                                    // En modo online, verificar si el ganador es mi rol
+                                    if (winner === myRole) {
+                                        winnerText = '¡Tú ganas!';
+                                    } else {
+                                        winnerText = `¡${opponentName} gana!`;
+                                    }
+                                } else if (gameMode === 'bot') {
+                                    winnerText = winner === 'X' ? '¡Tú ganas!' : '¡Bot gana!';
+                                } else {
+                                    // Modo local
+                                    winnerText = `¡Jugador ${winner} gana!`;
+                                }
+                                return winnerText;
+                            })()}
                         </span>
                     ) : (
                         <span className="text-slate-400 text-sm animate-pulse">
@@ -667,12 +741,19 @@ const TresEnRaya = () => {
                 {/* Controles de Pie de página */}
                 <div className="h-16"> 
                     {winner ? (
-                        <button 
-                            onClick={nextRound}
-                            className="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-bold text-lg shadow-lg shadow-indigo-900/20 transition-all animate-in slide-in-from-bottom-2"
-                        >
-                            Siguiente Ronda
-                        </button>
+                        // Solo mostrar botón al host (jugador X) en modo online, o siempre en otros modos
+                        (gameMode === 'online' && myRole === 'X') || gameMode !== 'online' ? (
+                            <button 
+                                onClick={nextRound}
+                                className="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-bold text-lg shadow-lg shadow-indigo-900/20 transition-all animate-in slide-in-from-bottom-2"
+                            >
+                                Siguiente Ronda
+                            </button>
+                        ) : (
+                            <div className="text-center bg-slate-800/50 py-3 rounded-lg border border-slate-700/50">
+                                <p className="text-slate-400 text-sm">Esperando siguiente ronda...</p>
+                            </div>
+                        )
                     ) : (
                         gameMode === 'online' && (
                             <div className="text-center bg-slate-800/50 py-2 rounded-lg border border-slate-700/50">
@@ -682,11 +763,55 @@ const TresEnRaya = () => {
                     )}
                 </div>
 
-                <button onClick={resetAll} className="w-full mt-2 text-slate-500 hover:text-slate-300 text-xs py-2">
+                <button onClick={handleExitClick} className="w-full mt-2 text-slate-500 hover:text-slate-300 text-xs py-2">
                     Abandonar Partida
                 </button>
 
             </div>
+            {/* Modal de confirmación de salida */}
+            {showExitConfirm && (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+                    <div className="bg-slate-800 rounded-2xl p-6 max-w-sm w-full border border-slate-700 shadow-2xl animate-in zoom-in duration-200">
+                        <h3 className="text-xl font-bold mb-2 text-white">¿Abandonar partida?</h3>
+                        <p className="text-slate-400 mb-6">Si abandonas, tu oponente ganará automáticamente.</p>
+                        <div className="flex gap-3">
+                            <button 
+                                onClick={cancelExit}
+                                className="flex-1 bg-slate-700 hover:bg-slate-600 py-3 rounded-xl font-bold transition-colors"
+                            >
+                                No, continuar
+                            </button>
+                            <button 
+                                onClick={confirmExit}
+                                className="flex-1 bg-rose-600 hover:bg-rose-500 py-3 rounded-xl font-bold transition-colors"
+                            >
+                                Sí, salir
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal cuando el oponente abandonó */}
+            {opponentLeft && (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+                    <div className="bg-slate-800 rounded-2xl p-6 max-w-sm w-full border border-slate-700 shadow-2xl animate-in zoom-in duration-200">
+                        <div className="text-center">
+                            <div className="bg-yellow-500/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                                <Users className="text-yellow-400" size={32} />
+                            </div>
+                            <h3 className="text-xl font-bold mb-2 text-white">¡Rival abandonó!</h3>
+                            <p className="text-slate-400 mb-6">{opponentName} ha abandonado la partida.</p>
+                            <button 
+                                onClick={resetAll}
+                                className="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-bold transition-colors"
+                            >
+                                Aceptar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
