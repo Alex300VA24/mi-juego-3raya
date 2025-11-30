@@ -214,16 +214,23 @@ const TresEnRaya = () => {
                 setWinningLine(data.winningLine || []);
                 setRoundStarter(data.roundStarter);
                 
-                // Nombres
-                if (data.players.O && view === 'lobby') setView('game');
-                if (myRole === 'X') setOpponentName(data.players.O || 'Esperando...');
-                else setOpponentName(data.players.X);
+                // CORRECCIÓN: Actualizar nombres correctamente
+                if (myRole === 'X') {
+                    setOpponentName(data.players.O || 'Esperando...');
+                } else if (myRole === 'O') {
+                    setOpponentName(data.players.X || 'Esperando...');
+                }
+                
+                // Si ambos jugadores están presentes y estamos en lobby, iniciar el juego
+                if (data.players.O && data.players.X && view === 'lobby') {
+                    setView('game');
+                }
             }
         }, (error) => {
             console.error("Error en snapshot:", error);
             setErrorMsg("Error de conexión");
         });
-    }, [view, myRole]);
+    }, [view, myRole]); // myRole es necesario aquí
 
     const createOnlineGame = useCallback(async () => {
         if (!user) return;
@@ -254,26 +261,38 @@ const TresEnRaya = () => {
 
     const joinOnlineGame = async () => {
         if (!user || !joinCode) return;
+        setErrorMsg(''); // Limpiar errores previos
+        
         const code = joinCode.toUpperCase().trim();
         const gameRef = getGameRef(code);
-        const snap = await getDoc(gameRef);
+        
+        try {
+            const snap = await getDoc(gameRef);
 
-        if (snap.exists()) {
-            const data = snap.data();
-            if (!data.players.O) {
-                await updateDoc(gameRef, {
-                    'players.O': playerName
-                });
-                setRoomId(code);
-                setMyRole('O');
-                setGameMode('online');
-                subscribeToGame(code);
-                setView('game'); 
+            if (snap.exists()) {
+                const data = snap.data();
+                
+                // Verificar que el jugador O no esté ocupado
+                if (!data.players.O) {
+                    await updateDoc(gameRef, {
+                        'players.O': playerName
+                    });
+                    
+                    setRoomId(code);
+                    setMyRole('O');
+                    setGameMode('online');
+                    setOpponentName(data.players.X); // Establecer el nombre del oponente
+                    subscribeToGame(code);
+                    setView('game'); // Ir directo al juego
+                } else {
+                    setErrorMsg('La partida está llena.');
+                }
             } else {
-                setErrorMsg('La partida está llena.');
+                setErrorMsg('Código inválido.');
             }
-        } else {
-            setErrorMsg('Código inválido.');
+        } catch (error) {
+            console.error("Error al unirse:", error);
+            setErrorMsg('Error al conectar. Verifica tu conexión.');
         }
     };
 
@@ -536,9 +555,11 @@ const TresEnRaya = () => {
                     <div className={`flex flex-col items-center p-2 rounded-xl transition-all duration-300 border-2 
                         ${turn === 'X' ? 'border-indigo-500 bg-indigo-500/10' : 'border-transparent opacity-60'}`}>
                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">
-                            {gameMode === 'online' && mySymbol === 'X' ? 'Tú (X)' : 'Jugador X'}
+                            {gameMode === 'online' && myRole === 'X' ? 'Tú (X)' : 'Jugador X'}
                         </p>
-                        <p className="font-bold text-sm truncate w-full text-center">{playerName}</p>
+                        <p className="font-bold text-sm truncate w-full text-center">
+                            {gameMode === 'online' && myRole === 'X' ? playerName : (gameMode === 'online' && myRole === 'O' ? opponentName : playerName)}
+                        </p>
                         <p className="text-xl font-bold text-indigo-400">{scores.X}</p>
                     </div>
                     
@@ -552,10 +573,10 @@ const TresEnRaya = () => {
                     <div className={`flex flex-col items-center p-2 rounded-xl transition-all duration-300 border-2
                         ${turn === 'O' ? 'border-rose-500 bg-rose-500/10' : 'border-transparent opacity-60'}`}>
                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">
-                            {gameMode === 'online' && mySymbol === 'O' ? 'Tú (O)' : opponentName}
+                            {gameMode === 'online' && myRole === 'O' ? 'Tú (O)' : 'Jugador O'}
                         </p>
                         <p className="font-bold text-sm truncate w-full text-center">
-                            {gameMode === 'online' && mySymbol === 'O' ? playerName : opponentName}
+                            {gameMode === 'online' && myRole === 'O' ? playerName : (gameMode === 'online' ? opponentName : opponentName)}
                         </p>
                         <p className="text-xl font-bold text-rose-400">{scores.O}</p>
                     </div>
