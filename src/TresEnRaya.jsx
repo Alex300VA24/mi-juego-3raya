@@ -214,15 +214,14 @@ const TresEnRaya = () => {
                 setWinningLine(data.winningLine || []);
                 setRoundStarter(data.roundStarter);
                 
-                // CORRECCIÓN: Actualizar nombres correctamente
                 if (myRole === 'X') {
                     setOpponentName(data.players.O || 'Esperando...');
                 } else if (myRole === 'O') {
                     setOpponentName(data.players.X || 'Esperando...');
                 }
                 
-                // Si ambos jugadores están presentes y estamos en lobby, iniciar el juego
-                if (data.players.O && data.players.X && view === 'lobby') {
+                // MODIFICADO: Iniciar juego solo si gameStarted es true
+                if (data.gameStarted && view === 'lobby') {
                     setView('game');
                 }
             }
@@ -230,7 +229,7 @@ const TresEnRaya = () => {
             console.error("Error en snapshot:", error);
             setErrorMsg("Error de conexión");
         });
-    }, [view, myRole]); // myRole es necesario aquí
+    }, [view, myRole]);
 
     const createOnlineGame = useCallback(async () => {
         if (!user) return;
@@ -252,6 +251,7 @@ const TresEnRaya = () => {
             scores: { X: 0, O: 0 },
             winner: null,
             winningLine: [],
+            gameStarted: false, // NUEVO
             createdAt: timestamp 
         });
 
@@ -294,6 +294,12 @@ const TresEnRaya = () => {
             console.error("Error al unirse:", error);
             setErrorMsg('Error al conectar. Verifica tu conexión.');
         }
+    };
+    const startOnlineGame = async () => {
+        const gameRef = getGameRef(roomId);
+        await updateDoc(gameRef, {
+            gameStarted: true
+        });
     };
 
     const handleOnlineClick = async (index) => {
@@ -493,21 +499,56 @@ const TresEnRaya = () => {
 
     // 3. LOBBY
     if (view === 'lobby') {
+        const isHost = myRole === 'X';
+        const opponentJoined = opponentName !== 'Esperando...';
+        
         return (
             <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white text-center">
                 <div className="bg-slate-800 p-8 rounded-2xl border border-slate-700 max-w-md w-full">
                     <div className="animate-pulse bg-emerald-500/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
                         <Users className="text-emerald-400" size={32} />
                     </div>
-                    <h2 className="text-2xl font-bold mb-2">Esperando rival...</h2>
-                    <p className="text-slate-400 mb-6">Comparte este código para jugar:</p>
                     
-                    <div className="bg-slate-900 p-4 rounded-xl flex items-center justify-between mb-6 border border-slate-700 relative overflow-hidden">
-                        <span className="text-3xl font-mono font-bold tracking-[0.2em] text-emerald-400">{roomId}</span>
-                        <button onClick={copyCode} className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
-                            {copied ? <Check size={24} className="text-emerald-500"/> : <Copy size={24} className="text-slate-400"/>}
-                        </button>
-                    </div>
+                    {isHost ? (
+                        // Vista del Host (quien creó la partida)
+                        <>
+                            <h2 className="text-2xl font-bold mb-2">
+                                {opponentJoined ? '¡Rival conectado!' : 'Esperando rival...'}
+                            </h2>
+                            <p className="text-slate-400 mb-6">
+                                {opponentJoined 
+                                    ? `${opponentName} se ha unido. ¡Inicia cuando estés listo!`
+                                    : 'Comparte este código para jugar:'}
+                            </p>
+                            
+                            <div className="bg-slate-900 p-4 rounded-xl flex items-center justify-between mb-6 border border-slate-700">
+                                <span className="text-3xl font-mono font-bold tracking-[0.2em] text-emerald-400">{roomId}</span>
+                                <button onClick={copyCode} className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
+                                    {copied ? <Check size={24} className="text-emerald-500"/> : <Copy size={24} className="text-slate-400"/>}
+                                </button>
+                            </div>
+
+                            {opponentJoined && (
+                                <button 
+                                    onClick={startOnlineGame}
+                                    className="w-full bg-emerald-600 hover:bg-emerald-500 py-3 rounded-xl font-bold flex items-center justify-center gap-2 mb-4 animate-in slide-in-from-bottom-2"
+                                >
+                                    <Play size={20} /> Iniciar Partida
+                                </button>
+                            )}
+                        </>
+                    ) : (
+                        // Vista del invitado (quien se unió)
+                        <>
+                            <h2 className="text-2xl font-bold mb-2">¡Conectado!</h2>
+                            <p className="text-slate-400 mb-6">
+                                Esperando que <span className="text-emerald-400 font-bold">{opponentName}</span> inicie la partida...
+                            </p>
+                            <div className="bg-slate-900 p-4 rounded-xl mb-6 border border-slate-700">
+                                <p className="text-slate-500 text-sm">Sala: <span className="text-emerald-400 font-mono">{roomId}</span></p>
+                            </div>
+                        </>
+                    )}
 
                     <button onClick={resetAll} className="text-slate-500 hover:text-white">Cancelar</button>
                 </div>
